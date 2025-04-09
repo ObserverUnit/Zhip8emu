@@ -29,7 +29,7 @@ const Test = struct {
             const v = e.@"1";
 
             expect(self.prog.register[reg] == v) catch |err| {
-                std.debug.print("reg V{x} unexpected value {x} expected {x}\n", .{ reg, self.prog.register[reg], v });
+                std.debug.print("reg V{X} unexpected value 0x{X} expected 0x{X}\n", .{ reg, self.prog.register[reg], v });
                 return err;
             };
         }
@@ -186,5 +186,125 @@ test "Ambigous Instructions" {
     try chip8_instance.executeOnce(&.{
         .{ 0, 0 },
         .{ 0xF, 1 },
+    });
+}
+
+test "Jump Instruction" {
+    const prog = .{
+        // jump over next instruction
+        // which is an invalid opcode at 0x202
+        0x12,
+        0x04,
+        // Invaild OpCode
+        0x00,
+        0x00,
+        // Set V0 to 42
+        0x60,
+        42,
+    };
+
+    var instance = Test.init(&prog, &.{}, .{});
+
+    try instance.executeCount(2, &.{
+        .{ 0, 42 },
+    });
+}
+
+test "Call Instruction" {
+    const prog = .{
+        // calls instruction at 0x206
+        0x22,
+        0x06,
+        // set V1 to 0x0D
+        0x61,
+        0x0D,
+        // Invaild OpCode
+        0x00,
+        0x00,
+        // Set V0 to 42
+        0x60,
+        42,
+        // returns back to 0x202
+        0x00,
+        0xEE,
+    };
+
+    var instance = Test.init(&prog, &.{}, .{});
+
+    try instance.executeCount(4, &.{
+        .{ 0, 42 },
+        .{ 1, 0x0D },
+    });
+}
+
+test "Skip Instruction" {
+    const prog = .{
+        0x60,
+        0x01,
+        // skip next instruction if V0 == 1
+        0x30,
+        1,
+        // Invaild OpCode
+        0x00,
+        0x00,
+        // Set V4 to 43
+        0x64,
+        43,
+    };
+
+    var instance = Test.init(&prog, &.{}, .{});
+
+    try instance.executeCount(3, &.{
+        .{ 4, 43 },
+    });
+}
+
+test "Skip Registers Instruction" {
+    const prog = .{
+        0x60,
+        23,
+        0x61,
+        42,
+        // skip next instruction if V0 != V1
+        0x90,
+        0x10,
+        // Invaild OpCode
+        0x00,
+        0x00,
+        // Set V3 to 42
+        0x63,
+        42,
+    };
+
+    var instance = Test.init(&prog, &.{}, .{});
+
+    try instance.executeCount(4, &.{.{ 3, 42 }});
+}
+
+test "Jump Offset Instruction" {
+    const prog = .{
+        // (0x200) set V2 to 0x02
+        0x62,
+        0x02,
+        // (0x202) jump offset instruction to 0x206 if chip8-super else it jumps to 0x204
+        0xB2,
+        0x04,
+        // (0x204) set V1 to 42
+        0x61,
+        42,
+        // (0x206) set V2 to 42
+        0x62,
+        42,
+    };
+
+    var instance_super = Test.init(&prog, &.{}, .{});
+    var instance_old = Test.init(&prog, &.{}, .{ .super = false });
+
+    try instance_super.executeCount(3, &.{
+        .{ 2, 42 },
+    });
+
+    try instance_old.executeCount(3, &.{
+        .{ 1, 42 },
     });
 }

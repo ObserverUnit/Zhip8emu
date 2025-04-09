@@ -1,10 +1,25 @@
 const std = @import("std");
 
 pub const OpCode = enum(u4) {
-    Clear = 0,
+    Execute = 0,
+    Jump = 1,
+    JumpOff = 0xB,
+    Call = 2,
+    /// Skip 1 instruction If Equal
+    SkipE = 3,
+    /// Skip 1 instruction If Not Equal
+    SkipNE = 4,
+    /// Skip 1 instruction If 2 Registers Equal
+    SkipRE = 5,
+    /// Skip 1 instruction If 2 Registers Not Equal
+    SkipRNE = 9,
     Set = 6,
     Add = 7,
     RegsOp = 8,
+
+    pub fn fromInt(value: u4) ?OpCode {
+        return std.meta.intToEnum(@This(), value) catch null;
+    }
 };
 
 const InstrHigher = packed struct(u8) {
@@ -28,8 +43,8 @@ pub const Instruction = packed struct(u16) {
 
         return .{ .higher = higher, .lower = lower };
     }
-    pub fn instr(self: Self) OpCode {
-        return @enumFromInt(self.higher.instr);
+    pub fn instr(self: Self) !OpCode {
+        return OpCode.fromInt(self.higher.instr) orelse error.InvaildInstruction;
     }
 
     pub fn x(self: Self) u4 {
@@ -52,7 +67,7 @@ pub const Instruction = packed struct(u16) {
         const nn: u12 = self.NN();
         const X: u12 = self.x();
 
-        return (X << 8) & nn;
+        return (X << 8) | nn;
     }
 };
 
@@ -64,6 +79,7 @@ pub const Chip8Flags = packed struct {
 
 pub const ExecutionError = error{
     InvaildInstruction,
+    InvaildOPCode,
 };
 
 pub const State = struct {
@@ -71,8 +87,9 @@ pub const State = struct {
     stack: [32]u16 = undefined,
     heap: [4096 + 0x200]u8 = undefined,
     // registers
-    stackPointer: usize = 0,
-    indexReg: u16 = 0x200,
+    sp: usize = 0,
+    heapIndexReg: u16 = 0x0,
+    pc: u16 = 0x200,
     register: [16]u8 = .{0} ** 16,
     // timers
     delayTimer: u8 = 0xFF,
@@ -89,8 +106,8 @@ pub const State = struct {
     }
 
     fn nextInstr(self: *Self) Instruction {
-        const b0 = self.heap[self.indexReg];
-        const b1 = self.heap[self.indexReg + 1];
+        const b0 = self.heap[self.pc];
+        const b1 = self.heap[self.pc + 1];
         return Instruction.from_bytes(b0, b1);
     }
 
@@ -99,64 +116,107 @@ pub const State = struct {
         self.register[0xF] = v;
     }
 
+    inline fn jump(self: *Self, addr: u16) void {
+        self.pc = addr;
+    }
+
+    inline fn jumpOff(self: *Self, instr: Instruction) void {
+        self.pc = if (!self.flags.super)
+            instr.NNN() + self.register[0]
+        else
+            instr.NNN() + self.register[instr.x()];
+    }
+
+    /// Returns from a subroutine
+    inline fn ret(self: *Self) void {
+        self.sp -= 1;
+        self.jump(self.stack[self.sp]);
+    }
+
+    /// Calls the subroutine at the address NNN
+    inline fn call(self: *Self, addr: u12) void {
+        self.stack[self.sp] = self.pc + 2;
+        self.sp += 1;
+        self.jump(addr);
+    }
+
+    inline fn handle2RegistersOp(self: *Self, reg1_num: u4, reg2_num: u4, op: u4) !void {
+        const reg1 = &self.register[reg1_num];
+        const reg2 = self.register[reg2_num];
+
+        switch (op) {
+            0 => reg1.* = reg2,
+            1 => reg1.* |= reg2,
+            2 => reg1.* &= reg2,
+            3 => reg1.* ^= reg2,
+            4 => {
+                const total = @addWithOverflow(reg1.*, reg2);
+                const carry = total[1];
+                const sum = total[0];
+                reg1.* = sum;
+                self.setFlagReg(carry);
+            },
+            // substraction instructions
+            5 => reg1.* -= reg2,
+            7 => reg1.* = reg2 - reg1.*,
+            // shift instructions
+            6 => {
+                if (!self.flags.super) reg1.* = reg2;
+
+                const first_bit: u8 = reg1.* & 0x1;
+                self.setFlagReg(first_bit);
+
+                reg1.* >>= 1;
+            },
+            0xE => {
+                if (!self.flags.super) reg1.* = reg2;
+
+                const last_bit: u8 = (reg1.* & 0b10000000) >> 7;
+                self.setFlagReg(last_bit);
+
+                reg1.* <<= 1;
+            },
+            else => return ExecutionError.InvaildInstruction,
+        }
+    }
+
+    fn clearScreen(self: *Self) void {
+        _ = self;
+        std.debug.print("Clear Screen!\n", .{});
+    }
+
+    inline fn skip_if(self: *Self, condition: bool) void {
+        if (condition) {
+            self.pc += 2;
+        }
+    }
+
     /// Executes the next instruction
     pub fn executeNext(self: *Self) ExecutionError!void {
         const instr = self.nextInstr();
-        defer self.indexReg += 2;
-        switch (instr.instr()) {
-            .Clear => {
-                std.debug.assert(instr.NNN() == 0E0);
-                std.debug.print("Clear screen!\n", .{});
+        const op = try instr.instr();
+
+        switch (op) {
+            .Execute => switch (instr.NNN()) {
+                0x0E0 => self.clearScreen(),
+                0x0EE => return self.ret(),
+                else => return ExecutionError.InvaildInstruction,
             },
-            .Set => {
-                const reg = instr.x();
-                self.register[reg] = instr.NN();
-            },
-            .RegsOp => {
-                const reg1_num = instr.x();
-                const reg2_num = instr.y();
-
-                const reg1 = &self.register[reg1_num];
-                const reg2 = self.register[reg2_num];
-
-                const op = instr.nibble();
-                switch (op) {
-                    0 => reg1.* = reg2,
-                    1 => reg1.* |= reg2,
-                    2 => reg1.* &= reg2,
-                    3 => reg1.* ^= reg2,
-                    4 => {
-                        const total = @addWithOverflow(reg1.*, reg2);
-                        const carry = total[1];
-                        const sum = total[0];
-                        reg1.* = sum;
-                        self.setFlagReg(carry);
-                    },
-                    5 => reg1.* -= reg2,
-                    7 => reg1.* = reg2 - reg1.*,
-                    6 => {
-                        if (!self.flags.super) reg1.* = reg2;
-
-                        const first_bit: u8 = reg1.* & 0x1;
-                        self.setFlagReg(first_bit);
-
-                        reg1.* >>= 1;
-                    },
-                    0xE => {
-                        if (!self.flags.super) reg1.* = reg2;
-
-                        const last_bit: u8 = (reg1.* & 0b10000000) >> 7;
-                        self.setFlagReg(last_bit);
-
-                        reg1.* <<= 1;
-                    },
-                    else => return ExecutionError.InvaildInstruction,
-                }
-            },
-            .Add => {
-                const reg = instr.x();
-                self.register[reg] += instr.NN();
-            },
+            // Index register manipulation instructions
+            .Jump => return self.jump(instr.NNN()),
+            .JumpOff => return self.jumpOff(instr),
+            .Call => return self.call(instr.NNN()),
+            // Index register manipulation condition instructions
+            .SkipE => self.skip_if(self.register[instr.x()] == instr.NN()),
+            .SkipNE => self.skip_if(self.register[instr.x()] != instr.NN()),
+            .SkipRE => self.skip_if(self.register[instr.x()] == self.register[instr.y()]),
+            .SkipRNE => self.skip_if(self.register[instr.x()] != self.register[instr.y()]),
+            // Register manipulation instructions
+            .Set => self.register[instr.x()] = instr.NN(),
+            .RegsOp => try self.handle2RegistersOp(instr.x(), instr.y(), instr.nibble()),
+            .Add => self.register[instr.x()] += instr.NN(),
         }
+
+        self.pc += 2;
     }
 };
