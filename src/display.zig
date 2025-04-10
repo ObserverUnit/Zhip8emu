@@ -75,8 +75,7 @@ fn raylib_loop(self: *Window) emu.ExecutionError!void {
 
         for (self.pixels, 0..) |row, y| {
             for (row, 0..) |color, x| {
-                if (color != .background)
-                    rl.drawRectangle(@intCast(x * pixel_scale), @intCast(y * pixel_scale), pixel_scale, pixel_scale, color.toRlColor());
+                rl.drawRectangle(@intCast(x * pixel_scale), @intCast(y * pixel_scale), pixel_scale, pixel_scale, color.toRlColor());
             }
         }
     }
