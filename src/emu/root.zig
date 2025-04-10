@@ -1,4 +1,5 @@
 const std = @import("std");
+const display = @import("../display.zig");
 
 pub const OpCode = enum(u4) {
     Special = 0,
@@ -47,7 +48,10 @@ pub const Instruction = packed struct(u16) {
         return .{ .higher = higher, .lower = lower };
     }
     pub fn instr(self: Self) !OpCode {
-        return OpCode.fromInt(self.higher.instr) orelse error.InvaildInstruction;
+        return OpCode.fromInt(self.higher.instr) orelse {
+            std.debug.print("Invaild Instruction Op: 0x{X}\n", .{self.higher.instr});
+            return error.InvaildInstruction;
+        };
     }
 
     pub fn x(self: Self) u4 {
@@ -100,6 +104,7 @@ pub const State = struct {
 
     flags: Chip8Flags,
     random: std.Random.DefaultPrng,
+    window: ?*display.Window = null,
 
     pub const Self = @This();
 
@@ -115,6 +120,10 @@ pub const State = struct {
         const rand = std.Random.DefaultPrng.init(seed);
         self.random = rand;
         return self;
+    }
+
+    pub fn setDisplay(self: *Self, window: *display.Window) void {
+        self.window = window;
     }
 
     fn nextInstr(self: *Self) Instruction {
@@ -208,8 +217,8 @@ pub const State = struct {
     }
 
     fn clearScreen(self: *Self) void {
-        _ = self;
         std.debug.print("Clear Screen!\n", .{});
+        if (self.window) |window| window.fillBackground(window, .background);
     }
 
     inline fn skip_if(self: *Self, condition: bool) void {
