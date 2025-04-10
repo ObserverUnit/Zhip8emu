@@ -262,6 +262,13 @@ pub const State = struct {
 
                 if (!self.flags.super) self.heapIndexReg += reg_op;
             },
+            // Binary Coded Decimal conversion
+            0x33 => {
+                const num = reg.*;
+                self.heap[self.heapIndexReg + 2] = num % 10;
+                self.heap[self.heapIndexReg + 1] = num % 10 % 10;
+                self.heap[self.heapIndexReg] = num % 10 % 10 % 10;
+            },
             else => |NN| {
                 std.debug.print("[ERROR]: Invaild NN 0x{X} for OpCode 0x{X}\n", .{ NN, @intFromEnum(OpCode.SpecialRegisters) });
                 return ExecutionError.InvaildInstruction;
