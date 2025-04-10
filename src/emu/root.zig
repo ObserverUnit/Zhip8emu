@@ -1,7 +1,7 @@
 const std = @import("std");
 
 pub const OpCode = enum(u4) {
-    Execute = 0,
+    Special = 0,
     Jump = 1,
     JumpOff = 0xB,
     Call = 2,
@@ -16,6 +16,9 @@ pub const OpCode = enum(u4) {
     Set = 6,
     Add = 7,
     RegsOp = 8,
+    SetMemIndex = 0xA,
+    SpecialRegisters = 0xF,
+    GenRandom = 0xC,
 
     pub fn fromInt(value: u4) ?OpCode {
         return std.meta.intToEnum(@This(), value) catch null;
@@ -96,12 +99,21 @@ pub const State = struct {
     soundTimer: u8 = 0xFF,
 
     flags: Chip8Flags,
+    random: std.Random.DefaultPrng,
+
     pub const Self = @This();
 
     /// Loads a Chip8 program from `bytes` and returns the program state
     pub fn load(bytes: []const u8, flags: Chip8Flags) Self {
-        var self: Self = .{ .flags = flags };
+        var self: Self = .{ .flags = flags, .random = undefined };
         @memcpy(self.heap[0x200 .. 0x200 + bytes.len], bytes);
+
+        var seed: u64 = undefined;
+        std.posix.getrandom(std.mem.asBytes(&seed)) catch |err|
+            std.debug.panic("failed to get a random seed: {}", .{err});
+
+        const rand = std.Random.DefaultPrng.init(seed);
+        self.random = rand;
         return self;
     }
 
@@ -180,6 +192,21 @@ pub const State = struct {
         }
     }
 
+    inline fn handleSpecialRegisters(self: *Self, reg_op: u4, op: u8) !void {
+        const reg = &self.register[reg_op];
+
+        switch (op) {
+            0x1E => {
+                self.heapIndexReg += reg.*;
+                if (self.heapIndexReg >= 0x1000) self.setFlagReg(1);
+            },
+            0x07 => reg.* = self.delayTimer,
+            0x15 => self.delayTimer = reg.*,
+            0x18 => self.soundTimer = reg.*,
+            else => return ExecutionError.InvaildInstruction,
+        }
+    }
+
     fn clearScreen(self: *Self) void {
         _ = self;
         std.debug.print("Clear Screen!\n", .{});
@@ -197,16 +224,19 @@ pub const State = struct {
         const op = try instr.instr();
 
         switch (op) {
-            .Execute => switch (instr.NNN()) {
+            // Really weird OPCode i couldn't come up with
+            // a better name
+            .Special => switch (instr.NNN()) {
                 0x0E0 => self.clearScreen(),
                 0x0EE => return self.ret(),
                 else => return ExecutionError.InvaildInstruction,
             },
-            // Index register manipulation instructions
+            // PC manipulation instructions
+            // returns so it doesn't skip an instruction
             .Jump => return self.jump(instr.NNN()),
             .JumpOff => return self.jumpOff(instr),
             .Call => return self.call(instr.NNN()),
-            // Index register manipulation condition instructions
+            // PC manipulation condition instructions
             .SkipE => self.skip_if(self.register[instr.x()] == instr.NN()),
             .SkipNE => self.skip_if(self.register[instr.x()] != instr.NN()),
             .SkipRE => self.skip_if(self.register[instr.x()] == self.register[instr.y()]),
@@ -215,6 +245,16 @@ pub const State = struct {
             .Set => self.register[instr.x()] = instr.NN(),
             .RegsOp => try self.handle2RegistersOp(instr.x(), instr.y(), instr.nibble()),
             .Add => self.register[instr.x()] += instr.NN(),
+            .SetMemIndex => self.heapIndexReg = instr.NNN(),
+            .SpecialRegisters => try self.handleSpecialRegisters(instr.x(), instr.NN()),
+            .GenRandom => {
+                const reg = &self.register[instr.x()];
+                const mask = instr.NN();
+                // TODO: this looks slow
+                const generator = self.random.random();
+                const rand = generator.int(u8) & mask;
+                reg.* = rand;
+            },
         }
 
         self.pc += 2;

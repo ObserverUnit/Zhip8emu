@@ -308,3 +308,24 @@ test "Jump Offset Instruction" {
         .{ 1, 42 },
     });
 }
+
+test "Random Number Generator" {
+    const prog = .{
+        // generates a random number between 0 and 6 in register V0
+        0xC0,
+        0x06,
+        // generates a random number between 0 and 254 in register V1
+        0xC1,
+        0xFE,
+    };
+
+    var instance = Test.init(&prog, &.{}, .{});
+    try instance.executeAll();
+
+    const V0 = instance.prog.register[0];
+    const V1 = instance.prog.register[1];
+
+    std.debug.print("see for your self if this is a random number: between 0 and 6 {}, between 0 and 254 {}\n", .{ V0, V1 });
+    try expect(V0 <= 6);
+    try expect(V1 <= 254);
+}
