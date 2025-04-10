@@ -49,7 +49,7 @@ pub const Instruction = packed struct(u16) {
     }
     pub fn instr(self: Self) !OpCode {
         return OpCode.fromInt(self.higher.instr) orelse {
-            std.debug.print("Invaild Instruction Op: 0x{X}\n", .{self.higher.instr});
+            std.debug.print("[ERROR]: Invaild Instruction Op: 0x{X}\n", .{self.higher.instr});
             return error.InvaildInstruction;
         };
     }
@@ -218,7 +218,11 @@ pub const State = struct {
 
     fn clearScreen(self: *Self) void {
         std.debug.print("Clear Screen!\n", .{});
-        if (self.window) |window| window.fillBackground(window, .background);
+        if (self.window) |window| window.fill(.background);
+    }
+
+    fn setPixel(self: *Self, x: u8, y: u8) void {
+        if (self.window) |window| window.setPixel(x, y, .foreground);
     }
 
     inline fn skip_if(self: *Self, condition: bool) void {
