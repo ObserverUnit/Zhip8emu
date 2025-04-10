@@ -1,6 +1,25 @@
 const std = @import("std");
 const display = @import("../display.zig");
 
+const Font = [_]u8{
+    0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+    0x20, 0x60, 0x20, 0x20, 0x70, // 1
+    0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+    0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+    0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+    0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+    0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+    0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+    0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+    0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+    0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+    0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+    0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+    0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+    0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+    0xF0, 0x80, 0xF0, 0x80, 0x80, // F
+};
+
 pub const OpCode = enum(u4) {
     Special = 0,
     Jump = 1,
@@ -20,6 +39,7 @@ pub const OpCode = enum(u4) {
     SetMemIndex = 0xA,
     SpecialRegisters = 0xF,
     GenRandom = 0xC,
+    Display = 0xD,
 
     pub fn fromInt(value: u4) ?OpCode {
         return std.meta.intToEnum(@This(), value) catch null;
@@ -106,11 +126,14 @@ pub const State = struct {
     random: std.Random.DefaultPrng,
     window: ?*display.Window = null,
 
+    const memFontStart = 0x50;
     pub const Self = @This();
 
     /// Loads a Chip8 program from `bytes` and returns the program state
     pub fn load(bytes: []const u8, flags: Chip8Flags) Self {
         var self: Self = .{ .flags = flags, .random = undefined };
+
+        @memcpy(self.heap[Self.memFontStart .. Self.memFontStart + Font.len], &Font);
         @memcpy(self.heap[0x200 .. 0x200 + bytes.len], bytes);
 
         var seed: u64 = undefined;
@@ -221,8 +244,31 @@ pub const State = struct {
         if (self.window) |window| window.fill(.background);
     }
 
-    fn setPixel(self: *Self, x: u8, y: u8) void {
-        if (self.window) |window| window.setPixel(x, y, .foreground);
+    inline fn setPixel(self: *Self, x: u8, y: u8, color: display.Color) void {
+        if (self.window) |window| window.setPixel(x, y, color);
+    }
+
+    inline fn handleDisplayInstr(self: *Self, reg_x: u4, reg_y: u4, amount: u4) void {
+        const x = self.register[reg_x] & 127;
+        const y = self.register[reg_y] & 63;
+
+        self.setFlagReg(0);
+        for (0..amount) |row_index_raw| {
+            // SHADOWING PLEASE
+            const row_index: u8 = @truncate(row_index_raw);
+            const row = self.heap[self.heapIndexReg + row_index];
+
+            for (0..8) |col_raw| {
+                const col: u3 = @truncate(col_raw);
+                const bit = ((row << col) & 0b10000000) >> 7;
+
+                const color: display.Color = if (bit == 1) .foreground else blk: {
+                    self.setFlagReg(1);
+                    break :blk .background;
+                };
+                self.setPixel(x + col, y + row_index, color);
+            }
+        }
     }
 
     inline fn skip_if(self: *Self, condition: bool) void {
@@ -268,6 +314,7 @@ pub const State = struct {
                 const rand = generator.int(u8) & mask;
                 reg.* = rand;
             },
+            .Display => self.handleDisplayInstr(instr.x(), instr.y(), instr.nibble()),
         }
 
         self.pc += 2;
