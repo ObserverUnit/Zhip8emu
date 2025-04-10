@@ -69,7 +69,7 @@ pub const Instruction = packed struct(u16) {
     }
     pub fn instr(self: Self) !OpCode {
         return OpCode.fromInt(self.higher.instr) orelse {
-            std.debug.print("[ERROR]: Invaild Instruction Op: 0x{X}\n", .{self.higher.instr});
+            std.debug.print("[ERROR]: Invaild Instruction OpCode: 0x{X}\n", .{self.higher.instr});
             return error.InvaildInstruction;
         };
     }
@@ -201,8 +201,16 @@ pub const State = struct {
                 self.setFlagReg(carry);
             },
             // substraction instructions
-            5 => reg1.* -= reg2,
-            7 => reg1.* = reg2 - reg1.*,
+            5 => {
+                const results = @subWithOverflow(reg1.*, reg2);
+                reg1.* = results[0];
+                self.setFlagReg(~results[1]);
+            },
+            7 => {
+                const results = @subWithOverflow(reg2, reg1.*);
+                reg1.* = results[0];
+                self.setFlagReg(~results[1]);
+            },
             // shift instructions
             6 => {
                 if (!self.flags.super) reg1.* = reg2;
@@ -303,7 +311,12 @@ pub const State = struct {
             // Register manipulation instructions
             .Set => self.register[instr.x()] = instr.NN(),
             .RegsOp => try self.handle2RegistersOp(instr.x(), instr.y(), instr.nibble()),
-            .Add => self.register[instr.x()] += instr.NN(),
+            .Add => {
+                const reg = &self.register[instr.x()];
+                const value = instr.NN();
+
+                reg.* = @addWithOverflow(reg.*, value)[0];
+            },
             .SetMemIndex => self.heapIndexReg = instr.NNN(),
             .SpecialRegisters => try self.handleSpecialRegisters(instr.x(), instr.NN()),
             .GenRandom => {
