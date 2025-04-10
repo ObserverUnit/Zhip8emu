@@ -228,7 +228,10 @@ pub const State = struct {
 
                 reg1.* <<= 1;
             },
-            else => return ExecutionError.InvaildInstruction,
+            else => |nibble| {
+                std.debug.print("[ERROR]: Invaild nibble 0x{X} for OpCode 0x{X}\n", .{ nibble, @intFromEnum(OpCode.RegsOp) });
+                return ExecutionError.InvaildInstruction;
+            },
         }
     }
 
@@ -243,7 +246,26 @@ pub const State = struct {
             0x07 => reg.* = self.delayTimer,
             0x15 => self.delayTimer = reg.*,
             0x18 => self.soundTimer = reg.*,
-            else => return ExecutionError.InvaildInstruction,
+            // Load registers to memory
+            0x55 => {
+                var i: usize = 0;
+                while (i <= reg_op) : (i += 1)
+                    self.heap[self.heapIndexReg + i] = self.register[i];
+
+                if (!self.flags.super) self.heapIndexReg += reg_op;
+            },
+            // Load memory to registers
+            0x65 => {
+                var i: usize = 0;
+                while (i <= reg_op) : (i += 1)
+                    self.register[i] = self.heap[self.heapIndexReg + i];
+
+                if (!self.flags.super) self.heapIndexReg += reg_op;
+            },
+            else => |NN| {
+                std.debug.print("[ERROR]: Invaild NN 0x{X} for OpCode 0x{X}\n", .{ NN, @intFromEnum(OpCode.SpecialRegisters) });
+                return ExecutionError.InvaildInstruction;
+            },
         }
     }
 
