@@ -262,6 +262,11 @@ pub const State = struct {
 
                 if (!self.flags.super) self.heapIndexReg += reg_op;
             },
+            // Point Index register to Font character
+            0x29 => {
+                // Each character is 5 pixels wide
+                self.heapIndexReg = Self.memFontStart + (reg.* & 0xFF) * 5;
+            },
             // Binary Coded Decimal conversion
             0x33 => {
                 const num = reg.*;
