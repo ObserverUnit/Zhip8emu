@@ -122,8 +122,8 @@ pub const State = struct {
     pc: u16 = 0x200,
     register: [16]u8 = .{0} ** 16,
     // timers
-    delayTimer: u8 = 0xFF,
-    soundTimer: u8 = 0xFF,
+    delayTimer: u8 = 0,
+    soundTimer: u8 = 0,
 
     flags: Chip8Flags,
     instructionsPerSecond: usize = 700,
@@ -132,6 +132,7 @@ pub const State = struct {
     random: std.Random.DefaultPrng,
     window: ?*display.Window = null,
 
+    last_pressed_key: ?KeyCode = null,
     const memFontStart = 0x50;
     pub const Self = @This();
 
@@ -281,7 +282,19 @@ pub const State = struct {
                 self.heap[self.heapIndexReg] = num % 10 % 10 % 10;
             },
             0x0A => {
-                if (self.getKey()) |key| reg.* = @intFromEnum(key) else self.pc -= 2;
+                // register a key only when it is released
+                // FIXME: pretty dirty
+                if (self.last_pressed_key) |key| {
+                    if (!self.isKeyPressed(key)) {
+                        self.last_pressed_key = null;
+                        reg.* = @intFromEnum(key);
+                        return;
+                    }
+                } else if (self.getKey()) |key| {
+                    self.last_pressed_key = key;
+                }
+
+                self.pc -= 2;
             },
             else => |NN| {
                 std.debug.print("[ERROR]: Invaild NN 0x{X} for OpCode 0x{X}\n", .{ NN, @intFromEnum(OpCode.SpecialRegisters) });
@@ -396,6 +409,11 @@ pub const State = struct {
     /// Execute once per frame
     /// Executes `self.instructionsPerSecond / self.framesPerSecond` isntructions
     pub fn oneCycle(self: *Self) !void {
+        defer {
+            if (self.delayTimer >= 1) self.delayTimer -= 1;
+            if (self.soundTimer >= 1) self.soundTimer -= 1;
+        }
+
         for (0..self.instructionsPerSecond / self.framesPerSecond) |_| try self.executeNext();
     }
 };
