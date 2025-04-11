@@ -1,5 +1,6 @@
 const std = @import("std");
 const display = @import("../display.zig");
+const KeyCode = display.KeyCode;
 
 const Font = [_]u8{
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
@@ -33,6 +34,8 @@ pub const OpCode = enum(u4) {
     SkipRE = 5,
     /// Skip 1 instruction If 2 Registers Not Equal
     SkipRNE = 9,
+    /// Skip 1 instruction If Key is pressed
+    SkipKey = 0xE,
     Set = 6,
     Add = 7,
     RegsOp = 8,
@@ -274,6 +277,9 @@ pub const State = struct {
                 self.heap[self.heapIndexReg + 1] = num % 10 % 10;
                 self.heap[self.heapIndexReg] = num % 10 % 10 % 10;
             },
+            0x0A => {
+                if (self.getKey()) |key| reg.* = @intFromEnum(key) else self.pc -= 2;
+            },
             else => |NN| {
                 std.debug.print("[ERROR]: Invaild NN 0x{X} for OpCode 0x{X}\n", .{ NN, @intFromEnum(OpCode.SpecialRegisters) });
                 return ExecutionError.InvaildInstruction;
@@ -286,13 +292,13 @@ pub const State = struct {
         if (self.window) |window| window.fill(.background);
     }
 
-    inline fn setPixel(self: *Self, x: u8, y: u8, color: display.Color) void {
-        if (self.window) |window| window.setPixel(x, y, color);
+    inline fn togglePixel(self: *Self, x: u8, y: u8) bool {
+        return if (self.window) |window| window.togglePixel(x & 127, y & 63) else false;
     }
 
     inline fn handleDisplayInstr(self: *Self, reg_x: u4, reg_y: u4, amount: u4) void {
-        const x = self.register[reg_x] & 127;
-        const y = self.register[reg_y] & 63;
+        const x = self.register[reg_x];
+        const y = self.register[reg_y];
 
         self.setFlagReg(0);
         for (0..amount) |row_index_raw| {
@@ -304,19 +310,32 @@ pub const State = struct {
                 const col: u3 = @truncate(col_raw);
                 const bit = ((row << col) & 0b10000000) >> 7;
 
-                const color: display.Color = if (bit == 1) .foreground else blk: {
-                    self.setFlagReg(1);
-                    break :blk .background;
-                };
-                self.setPixel(x + col, y + row_index, color);
+                if (bit == 1)
+                    if (self.togglePixel(x + col, y + row_index))
+                        self.setFlagReg(1);
             }
         }
     }
 
-    inline fn skip_if(self: *Self, condition: bool) void {
-        if (condition) {
-            self.pc += 2;
+    inline fn getKey(self: *const Self) ?KeyCode {
+        return if (self.window) |window| window.getKeyPressed() else null;
+    }
+
+    inline fn handleSkipKeyInstruction(self: *Self, reg_op: u4, nn: u8) !void {
+        const pressed_key = self.getKey() orelse return;
+
+        const reg: u4 = @truncate(self.register[reg_op]);
+        const key = KeyCode.fromInt(reg);
+
+        switch (nn) {
+            0x9E => self.skip_if(key == pressed_key),
+            0xA1 => self.skip_if(key != pressed_key),
+            else => return ExecutionError.InvaildInstruction,
         }
+    }
+
+    inline fn skip_if(self: *Self, condition: bool) void {
+        if (condition) self.pc += 2;
     }
 
     /// Executes the next instruction
@@ -342,6 +361,7 @@ pub const State = struct {
             .SkipNE => self.skip_if(self.register[instr.x()] != instr.NN()),
             .SkipRE => self.skip_if(self.register[instr.x()] == self.register[instr.y()]),
             .SkipRNE => self.skip_if(self.register[instr.x()] != self.register[instr.y()]),
+            .SkipKey => try self.handleSkipKeyInstruction(instr.x(), instr.NN()),
             // Register manipulation instructions
             .Set => self.register[instr.x()] = instr.NN(),
             .RegsOp => try self.handle2RegistersOp(instr.x(), instr.y(), instr.nibble()),

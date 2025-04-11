@@ -13,6 +13,45 @@ pub const Color = enum {
             .foreground => .white,
         };
     }
+
+    fn flip(self: Color) Color {
+        return switch (self) {
+            .background => .foreground,
+            .foreground => .background,
+        };
+    }
+};
+
+pub const KeyCode = enum(u4) {
+    Key0 = 0,
+    Key1 = 1,
+    Key2 = 2,
+    Key3 = 3,
+    Key4 = 4,
+    Key5 = 5,
+    Key6 = 6,
+    Key7 = 7,
+    Key8 = 8,
+    Key9 = 9,
+    KeyA = 0xA,
+    KeyB = 0xB,
+    KeyC = 0xC,
+    KeyD = 0xD,
+    KeyE = 0xE,
+    KeyF = 0xF,
+
+    pub inline fn fromInt(i: u4) KeyCode {
+        return @enumFromInt(i);
+    }
+
+    pub inline fn fromChar(char: u8) ?KeyCode {
+        return switch (char) {
+            '0'...'9' => KeyCode.fromInt(@truncate(char - '0')),
+            'A'...'F' => KeyCode.fromInt(@truncate(char - 'A' + 0xA)),
+            'a'...'f' => KeyCode.fromInt(@truncate(char - 'a' + 0xA)),
+            else => null,
+        };
+    }
 };
 
 pub const Window = struct {
@@ -21,7 +60,8 @@ pub const Window = struct {
     loop: *const fn (
         self: *Window,
     ) emu.ExecutionError!void,
-    pixels: *[128][64]Color,
+    get_keypressed: *const fn () ?KeyCode,
+    pixels: *[64][128]Color,
 
     const Self = @This();
     const pixelScale = 16;
@@ -34,22 +74,31 @@ pub const Window = struct {
         }
     }
 
-    pub fn setPixel(self: *Self, x: u8, y: u8, color: Color) void {
-        self.pixels[y][x] = color;
+    /// Toggles a pixel from On to Off and from Off to On
+    /// returns true if a pixel was turned to Off
+    pub fn togglePixel(self: *Self, x: u8, y: u8) bool {
+        const pixel = &self.pixels[y][x];
+        pixel.* = pixel.flip();
+        return if (pixel.* == .background) true else false;
     }
 
     pub fn run(self: *Window) emu.ExecutionError!void {
         return self.loop(self);
     }
 
+    pub fn getKeyPressed(self: *const Self) ?KeyCode {
+        return self.get_keypressed();
+    }
+
     pub fn init(allocator: std.mem.Allocator, state: *emu.State, loop: *const fn (
         self: *Window,
-    ) emu.ExecutionError!void) !Window {
-        const pixels = try allocator.create([128][64]Color);
+    ) emu.ExecutionError!void, get_keypressed: *const fn () ?KeyCode) !Window {
+        const pixels = try allocator.create([64][128]Color);
         return .{
             .allocator = allocator,
             .state = state,
             .loop = loop,
+            .get_keypressed = get_keypressed,
             .pixels = pixels,
         };
     }
@@ -58,6 +107,14 @@ pub const Window = struct {
         self.allocator.destroy(self.pixels);
     }
 };
+
+fn raylib_keypressed() ?KeyCode {
+    const got: u32 = @bitCast(rl.getCharPressed());
+    if (got == 0) return null;
+    const c: u8 = @truncate(got);
+
+    return KeyCode.fromChar(c);
+}
 
 fn raylib_loop(self: *Window) emu.ExecutionError!void {
     const pixel_scale = Window.pixelScale;
@@ -84,5 +141,5 @@ fn raylib_loop(self: *Window) emu.ExecutionError!void {
 /// Gives `state` a window which uses raylib internally.
 /// The `allocator` is used to allocate memory for storing the pixels there are maximum 128*64 pixels.
 pub fn initRlWindow(state: *emu.State, allocator: std.mem.Allocator) !Window {
-    return Window.init(allocator, state, raylib_loop);
+    return Window.init(allocator, state, raylib_loop, raylib_keypressed);
 }
