@@ -126,6 +126,9 @@ pub const State = struct {
     soundTimer: u8 = 0xFF,
 
     flags: Chip8Flags,
+    instructionsPerSecond: usize = 700,
+    framesPerSecond: usize = 60,
+
     random: std.Random.DefaultPrng,
     window: ?*display.Window = null,
 
@@ -321,15 +324,18 @@ pub const State = struct {
         return if (self.window) |window| window.getKeyPressed() else null;
     }
 
-    inline fn handleSkipKeyInstruction(self: *Self, reg_op: u4, nn: u8) !void {
-        const pressed_key = self.getKey() orelse return;
+    inline fn isKeyPressed(self: *const Self, code: KeyCode) bool {
+        return if (self.window) |window| window.isKeyPressed(code) else false;
+    }
 
+    inline fn handleSkipKeyInstruction(self: *Self, reg_op: u4, nn: u8) !void {
         const reg: u4 = @truncate(self.register[reg_op]);
         const key = KeyCode.fromInt(reg);
+        const isPressed = self.isKeyPressed(key);
 
         switch (nn) {
-            0x9E => self.skip_if(key == pressed_key),
-            0xA1 => self.skip_if(key != pressed_key),
+            0x9E => self.skip_if(isPressed),
+            0xA1 => self.skip_if(!isPressed),
             else => return ExecutionError.InvaildInstruction,
         }
     }
@@ -385,5 +391,11 @@ pub const State = struct {
         }
 
         self.pc += 2;
+    }
+
+    /// Execute once per frame
+    /// Executes `self.instructionsPerSecond / self.framesPerSecond` isntructions
+    pub fn oneCycle(self: *Self) !void {
+        for (0..self.instructionsPerSecond / self.framesPerSecond) |_| try self.executeNext();
     }
 };

@@ -52,6 +52,20 @@ pub const KeyCode = enum(u4) {
             else => null,
         };
     }
+
+    pub inline fn intoChar(self: KeyCode) u8 {
+        const int: u4 = @intFromEnum(self);
+
+        return switch (int) {
+            0...9 => @as(u8, int) + '0',
+            0xA...0xF => @as(u8, int) - 0xA + 'A',
+        };
+    }
+    pub inline fn intoRlKey(self: KeyCode) rl.KeyboardKey {
+        const char = self.intoChar();
+        // TODO: make a configurable keymap
+        return @enumFromInt(char);
+    }
 };
 
 pub const Window = struct {
@@ -60,6 +74,7 @@ pub const Window = struct {
     loop: *const fn (
         self: *Window,
     ) emu.ExecutionError!void,
+    is_keypressed: *const fn (code: KeyCode) bool,
     get_keypressed: *const fn () ?KeyCode,
     pixels: *[64][128]Color,
 
@@ -90,15 +105,20 @@ pub const Window = struct {
         return self.get_keypressed();
     }
 
+    pub fn isKeyPressed(self: *const Self, code: KeyCode) bool {
+        return self.is_keypressed(code);
+    }
+
     pub fn init(allocator: std.mem.Allocator, state: *emu.State, loop: *const fn (
         self: *Window,
-    ) emu.ExecutionError!void, get_keypressed: *const fn () ?KeyCode) !Window {
+    ) emu.ExecutionError!void, get_keypressed: *const fn () ?KeyCode, is_keypressed: *const fn (code: KeyCode) bool) !Window {
         const pixels = try allocator.create([64][128]Color);
         return .{
             .allocator = allocator,
             .state = state,
             .loop = loop,
             .get_keypressed = get_keypressed,
+            .is_keypressed = is_keypressed,
             .pixels = pixels,
         };
     }
@@ -107,6 +127,10 @@ pub const Window = struct {
         self.allocator.destroy(self.pixels);
     }
 };
+
+fn raylib_is_keypressed(code: KeyCode) bool {
+    return rl.isKeyDown(code.intoRlKey());
+}
 
 fn raylib_keypressed() ?KeyCode {
     const got: u32 = @bitCast(rl.getCharPressed());
@@ -125,10 +149,10 @@ fn raylib_loop(self: *Window) emu.ExecutionError!void {
 
     rl.setTargetFPS(60);
     while (!rl.windowShouldClose()) {
+        try self.state.oneCycle();
+
         rl.beginDrawing();
         defer rl.endDrawing();
-
-        try self.state.executeNext();
 
         for (self.pixels, 0..) |row, y| {
             for (row, 0..) |color, x| {
@@ -141,5 +165,5 @@ fn raylib_loop(self: *Window) emu.ExecutionError!void {
 /// Gives `state` a window which uses raylib internally.
 /// The `allocator` is used to allocate memory for storing the pixels there are maximum 128*64 pixels.
 pub fn initRlWindow(state: *emu.State, allocator: std.mem.Allocator) !Window {
-    return Window.init(allocator, state, raylib_loop, raylib_keypressed);
+    return Window.init(allocator, state, raylib_loop, raylib_keypressed, raylib_is_keypressed);
 }
